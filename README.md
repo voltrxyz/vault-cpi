@@ -19,6 +19,14 @@ This documentation covers Cross-Program Invocation (CPI) integration for Voltr V
 - `request_withdraw_vault` - Initiate a withdrawal request, locking LP tokens into a receipt.
 - `withdraw_vault` - Finalize the withdrawal after the waiting period has passed, burning the locked LP tokens to receive the underlying assets.
 
+### 3. Cancel Withdrawal
+
+- `cancel_request_withdraw_vault` - Cancel a pending withdrawal request, refunding LP tokens to the user.
+
+### 4. Instant Withdrawal
+
+- `instant_withdraw_vault` - Withdraw assets instantly without a waiting period (only available for vaults with zero withdrawal waiting period).
+
 ---
 
 ## 1. Deposit Vault CPI Integration
@@ -321,6 +329,183 @@ impl<'info> WithdrawVaultParams<'info> {
 
 ---
 
+## 3. Cancel Request Withdraw Vault CPI Integration
+
+This function cancels a pending withdrawal request. The escrowed LP tokens are refunded to the user (minus any redemption fee), and the receipt account is closed.
+
+### Function Discriminator
+
+```rust
+fn get_cancel_request_withdraw_vault_discriminator() -> [u8; 8] {
+    // discriminator = sha256("global:cancel_request_withdraw_vault")[0..8]
+    [231, 54, 14, 6, 223, 124, 127, 238]
+}
+```
+
+### `cancel_request_withdraw_vault` CPI Struct
+
+```rust
+pub struct CancelRequestWithdrawVaultParams<'info> {
+    pub user_transfer_authority: AccountInfo<'info>,
+    pub protocol: AccountInfo<'info>,
+    pub vault: AccountInfo<'info>,
+    pub vault_lp_mint: AccountInfo<'info>,
+    pub user_lp_ata: AccountInfo<'info>,
+    pub request_withdraw_lp_ata: AccountInfo<'info>,
+    pub request_withdraw_vault_receipt: AccountInfo<'info>,
+    pub lp_token_program: AccountInfo<'info>,
+    pub system_program: AccountInfo<'info>,
+    // Target Voltr Vault program
+    pub voltr_vault_program: AccountInfo<'info>,
+}
+```
+
+### Implementation
+
+```rust
+impl<'info> CancelRequestWithdrawVaultParams<'info> {
+    pub fn cancel_request_withdraw_vault(&self) -> Result<()> {
+        let instruction_data = get_cancel_request_withdraw_vault_discriminator().to_vec();
+
+        let account_metas = vec![
+            AccountMeta::new(*self.user_transfer_authority.key, true),
+            AccountMeta::new_readonly(*self.protocol.key, false),
+            AccountMeta::new(*self.vault.key, false),
+            AccountMeta::new(*self.vault_lp_mint.key, false),
+            AccountMeta::new(*self.user_lp_ata.key, false),
+            AccountMeta::new(*self.request_withdraw_lp_ata.key, false),
+            AccountMeta::new(*self.request_withdraw_vault_receipt.key, false),
+            AccountMeta::new_readonly(*self.lp_token_program.key, false),
+            AccountMeta::new_readonly(*self.system_program.key, false),
+        ];
+
+        let instruction = Instruction {
+            program_id: *self.voltr_vault_program.key,
+            accounts: account_metas,
+            data: instruction_data,
+        };
+
+        invoke(&instruction, &self.to_account_infos())?;
+        Ok(())
+    }
+}
+```
+
+> Full snippet available [here](./references/cancel_request_withdraw_vault.rs)
+
+### `cancel_request_withdraw_vault` Account Explanations
+
+| Account                          | Mutability | Signer | Purpose                                                              |
+| -------------------------------- | ---------- | ------ | -------------------------------------------------------------------- |
+| `user_transfer_authority`        | Mutable    | Yes    | The user cancelling the withdrawal; receives closed receipt's rent.  |
+| `protocol`                       | Immutable  | No     | The global Voltr protocol state account.                             |
+| `vault`                          | Mutable    | No     | The vault state account.                                             |
+| `vault_lp_mint`                  | Mutable    | No     | The vault's LP mint.                                                 |
+| `user_lp_ata`                    | Mutable    | No     | The user's LP token account (destination for refunded LP tokens).    |
+| `request_withdraw_lp_ata`        | Mutable    | No     | The receipt's ATA holding escrowed LP tokens (source for refund).    |
+| `request_withdraw_vault_receipt` | Mutable    | No     | The PDA receipt account, which will be closed after cancellation.    |
+| `lp_token_program`               | Immutable  | No     | The Token Program for LP tokens.                                     |
+| `system_program`                 | Immutable  | No     | The Solana System Program.                                           |
+
+---
+
+## 4. Instant Withdraw Vault CPI Integration
+
+This function allows a user to withdraw assets from the vault instantly, without going through the two-step request/withdraw flow. This is only available for vaults that have a `withdrawal_waiting_period` of zero.
+
+### Function Discriminator
+
+```rust
+fn get_instant_withdraw_vault_discriminator() -> [u8; 8] {
+    // discriminator = sha256("global:instant_withdraw_vault")[0..8]
+    [221, 56, 115, 168, 128, 220, 235, 245]
+}
+```
+
+### `instant_withdraw_vault` CPI Struct
+
+```rust
+pub struct InstantWithdrawVaultParams<'info> {
+    pub user_transfer_authority: AccountInfo<'info>,
+    pub protocol: AccountInfo<'info>,
+    pub vault: AccountInfo<'info>,
+    pub vault_asset_mint: AccountInfo<'info>,
+    pub vault_lp_mint: AccountInfo<'info>,
+    pub user_lp_ata: AccountInfo<'info>,
+    pub vault_asset_idle_ata: AccountInfo<'info>,
+    pub vault_asset_idle_auth: AccountInfo<'info>,
+    pub user_asset_ata: AccountInfo<'info>,
+    pub asset_token_program: AccountInfo<'info>,
+    pub lp_token_program: AccountInfo<'info>,
+    pub system_program: AccountInfo<'info>,
+    // Target Voltr Vault program
+    pub voltr_vault_program: AccountInfo<'info>,
+}
+```
+
+### Implementation
+
+```rust
+impl<'info> InstantWithdrawVaultParams<'info> {
+    pub fn instant_withdraw_vault(
+        &self,
+        amount: u64,
+        is_amount_in_lp: bool,
+        is_withdraw_all: bool
+    ) -> Result<()> {
+        let mut instruction_data = get_instant_withdraw_vault_discriminator().to_vec();
+        instruction_data.extend_from_slice(&amount.to_le_bytes());
+        instruction_data.push(is_amount_in_lp as u8);
+        instruction_data.push(is_withdraw_all as u8);
+
+        let account_metas = vec![
+            AccountMeta::new_readonly(*self.user_transfer_authority.key, true),
+            AccountMeta::new_readonly(*self.protocol.key, false),
+            AccountMeta::new(*self.vault.key, false),
+            AccountMeta::new_readonly(*self.vault_asset_mint.key, false),
+            AccountMeta::new(*self.vault_lp_mint.key, false),
+            AccountMeta::new(*self.user_lp_ata.key, false),
+            AccountMeta::new(*self.vault_asset_idle_ata.key, false),
+            AccountMeta::new(*self.vault_asset_idle_auth.key, false),
+            AccountMeta::new(*self.user_asset_ata.key, false),
+            AccountMeta::new_readonly(*self.asset_token_program.key, false),
+            AccountMeta::new_readonly(*self.lp_token_program.key, false),
+            AccountMeta::new_readonly(*self.system_program.key, false),
+        ];
+
+        let instruction = Instruction {
+            program_id: *self.voltr_vault_program.key,
+            accounts: account_metas,
+            data: instruction_data,
+        };
+
+        invoke(&instruction, &self.to_account_infos())?;
+        Ok(())
+    }
+}
+```
+
+> Full snippet available [here](./references/instant_withdraw_vault.rs)
+
+### `instant_withdraw_vault` Account Explanations
+
+| Account                   | Mutability | Signer | Purpose                                             |
+| ------------------------- | ---------- | ------ | --------------------------------------------------- |
+| `user_transfer_authority` | Immutable  | Yes    | The user withdrawing assets.                        |
+| `protocol`                | Immutable  | No     | The global Voltr protocol state account.            |
+| `vault`                   | Mutable    | No     | The vault state account.                            |
+| `vault_asset_mint`        | Immutable  | No     | The mint of the asset being withdrawn.              |
+| `vault_lp_mint`           | Mutable    | No     | The vault's LP mint.                                |
+| `user_lp_ata`             | Mutable    | No     | The user's LP token account (source for burn).      |
+| `vault_asset_idle_ata`    | Mutable    | No     | The vault's idle ATA for the asset (source).        |
+| `vault_asset_idle_auth`   | Mutable    | No     | The PDA authority over the `vault_asset_idle_ata`.  |
+| `user_asset_ata`          | Mutable    | No     | The user's ATA for the asset (destination).         |
+| `asset_token_program`     | Immutable  | No     | The Token Program or Token-2022 Program for assets. |
+| `lp_token_program`        | Immutable  | No     | The Token Program for LP tokens.                    |
+| `system_program`          | Immutable  | No     | The Solana System Program.                          |
+
+---
+
 ## Key Implementation Notes
 
 ### 1. Account Derivation
@@ -344,4 +529,5 @@ Your program should be prepared to handle errors from the Voltr Vault program, s
 - `InvalidAmount`: Input amount is zero or invalid.
 - `MaxCapExceeded`: Deposit would exceed the vault's maximum capacity.
 - `WithdrawalNotYetAvailable`: Attempting to `withdraw_vault` before the waiting period has passed.
+- `InstantWithdrawNotAllowed`: Attempting to `instant_withdraw_vault` on a vault with a non-zero withdrawal waiting period.
 - `OperationNotAllowed`: The protocol has globally disabled the attempted operation.
