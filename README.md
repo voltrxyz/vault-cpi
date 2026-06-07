@@ -38,7 +38,7 @@ This function allows a user to deposit an underlying asset into the vault and mi
 ```rust
 fn get_deposit_vault_discriminator() -> [u8; 8] {
     // discriminator = sha256("global:deposit_vault")[0..8]
-    [41, 158, 82, 88, 95, 140, 106, 154]
+    [126, 224, 21, 255, 228, 53, 117, 33]
 }
 ```
 
@@ -155,7 +155,7 @@ This function initiates a withdrawal. The user specifies an amount, and their LP
 ```rust
 fn get_request_withdraw_vault_discriminator() -> [u8; 8] {
     // discriminator = sha256("global:request_withdraw_vault")[0..8]
-    [147, 67, 155, 26, 32, 163, 32, 193]
+    [248, 225, 47, 22, 116, 144, 23, 143]
 }
 ```
 
@@ -246,7 +246,7 @@ After the `withdrawal_waiting_period` defined in the vault has passed, this func
 ```rust
 fn get_withdraw_vault_discriminator() -> [u8; 8] {
     // discriminator = sha256("global:withdraw_vault")[0..8]
-    [81, 229, 229, 94, 86, 233, 198, 15]
+    [135, 7, 237, 120, 149, 94, 95, 7]
 }
 ```
 
